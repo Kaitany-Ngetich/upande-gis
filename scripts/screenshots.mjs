@@ -2,6 +2,7 @@
 // screenshot of each step (docs/screens). Needs: `npx expo start --web`
 // on :8081 and Chrome started with --remote-debugging-port=9333.
 //   node scripts/screenshots.mjs [outDir] [baseUrl]
+import { Buffer } from 'node:buffer';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const OUT = process.argv[2] ?? 'docs/screens';
@@ -9,15 +10,18 @@ const BASE = process.argv[3] ?? 'http://localhost:8081';
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const targets = await (await fetch('http://127.0.0.1:9333/json')).json();
-const page = targets.find((t) => t.type === 'page');
+// Our own tab, so other pages open in that Chrome are left alone.
+const page = await (await fetch('http://127.0.0.1:9333/json/new?about:blank', { method: 'PUT' })).json();
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((r) => (ws.onopen = r));
 let id = 0;
 const pending = new Map();
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data);
-  if (m.id && pending.has(m.id)) (pending.get(m.id)(m), pending.delete(m.id));
+  if (m.id && pending.has(m.id)) {
+    pending.get(m.id)(m);
+    pending.delete(m.id);
+  }
 };
 const send = (method, params = {}) =>
   new Promise((res) => {
@@ -80,6 +84,7 @@ const scrollTop = () =>
   evaluate(`[...document.querySelectorAll('div')].forEach((d) => { if (d.scrollHeight > d.clientHeight + 5) d.scrollTop = 0; }); window.scrollTo(0, 0)`);
 
 await send('Page.enable');
+await send('Network.setCacheDisabled', { cacheDisabled: true }); // always the latest bundle
 await size(844);
 await send('Page.navigate', { url: `${BASE}/login` });
 await waitForText('Explore the demo', 120000);
@@ -113,5 +118,31 @@ await sleep(800);
 await shot('6-submitted');
 await evaluate('history.back()');
 await sleep(5000);
+await scrollTop();
 await shot('7-run-progress');
+
+// Offline: no signal, inspect the next junction, see it queued, then sync.
+await tap('Demo: turn signal off', 2500);
+await tap('J-002', 500);
+await waitForText('DISTANCE');
+await tap('Demo: walk to this waypoint', 1500);
+await tap('Check in here', 1500);
+await tap('Yes', 500);
+await typeInto('0', '45');
+await tap('Good', 500);
+await tap('Submit inspection', 2000);
+await scrollTop();
+await sleep(800);
+await shot('8-offline-saved');
+await evaluate('history.back()');
+await sleep(4000);
+await size(1100);
+await scrollTop();
+await sleep(1500);
+await shot('9-offline-run');
+await tap('Demo: turn signal on', 5000);
+await scrollTop();
+await sleep(1500);
+await shot('10-synced');
 ws.close();
+await fetch(`http://127.0.0.1:9333/json/close/${page.id}`);
