@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -42,11 +43,7 @@ export default function Login() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.hero}>
-            <View style={[styles.logo, { backgroundColor: theme.brandText }]}>
-              <T size={30} weight="800" color={theme.brand}>
-                U
-              </T>
-            </View>
+            <Image source={require('@/assets/images/splash-icon.png')} style={styles.logo} contentFit="contain" accessibilityIgnoresInvertColors />
             <T size={30} weight="800" color={theme.brandText}>
               Upande GIS
             </T>
@@ -120,5 +117,5 @@ export default function Login() {
 const styles = StyleSheet.create({
   scroll: { flexGrow: 1, justifyContent: 'center', padding: 20, gap: 18, maxWidth: 520, width: '100%', alignSelf: 'center' },
   hero: { alignItems: 'center', gap: 8, marginBottom: 6 },
-  logo: { width: 64, height: 64, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  logo: { width: 96, height: 96 },
 });
