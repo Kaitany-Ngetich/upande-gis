@@ -5,7 +5,9 @@
   "dependencies": {
     "@expo/ui": "~57.0.25",
     "expo": "~57.0.30",
+    "expo-build-properties": "~57.0.22",
     "expo-constants": "~57.0.22",
+    "expo-dev-client": "~57.0.20",
     "expo-device": "~57.0.2",
     "expo-file-system": "~57.0.7",
     "expo-font": "~57.0.4",
@@ -43,11 +45,11 @@
   },
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "node --test scripts/site.test.mjs"
   },
   "private": true
 }
