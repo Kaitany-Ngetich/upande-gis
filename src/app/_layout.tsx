@@ -5,6 +5,8 @@ import { useColorScheme } from 'react-native';
 
 import { useTheme } from '@/hooks/use-theme';
 import { SessionProvider, useSession } from '@/lib/session';
+// Defines the background GPS task at startup (the OS may wake the app just for it).
+import '@/lib/track';
 
 SplashScreen.preventAutoHideAsync();
 

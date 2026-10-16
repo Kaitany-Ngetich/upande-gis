@@ -1,10 +1,13 @@
 import { router, Stack } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 
+import { SyncCard, SyncPill } from '@/components/sync-status';
 import { Banner, Button, Card, Pill, Progress, statusColor, T } from '@/components/ui';
 import { useTheme } from '@/hooks/use-theme';
-import { useSession } from '@/lib/session';
+import { confirm } from '@/lib/confirm';
+import { isOffline } from '@/lib/erp';
+import { useOffline, useSession, useStore } from '@/lib/session';
 import type { RunSummary } from '@/lib/types';
 
 function niceDate(iso: string): string {
@@ -19,49 +22,82 @@ function niceDate(iso: string): string {
 
 export default function MyRuns() {
   const theme = useTheme();
-  const { backend, user, site, signOut } = useSession();
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
+  const { user, site, signOut } = useSession();
+  const store = useStore();
+  const view = useOffline();
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!backend) return;
-    setRefreshing(true);
-    setError(null);
-    try {
-      setRuns(await backend.myRuns());
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    } finally {
-      setRefreshing(false);
-    }
-  }, [backend]);
+  const refresh = useCallback(
+    () =>
+      store.refreshList().then(
+        () => setError(null),
+        (e: any) => setError(isOffline(e) ? null : (e?.message ?? String(e))),
+      ),
+    [store],
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    void refresh();
+  }, [refresh]);
+
+  const pullToRefresh = async () => {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  };
+
+  // Runs from the last list ERP sent, with this phone's progress on top
+  // (and any downloaded run ERP no longer lists, e.g. just finished offline).
+  const runs: RunSummary[] | null = useMemo(() => {
+    const local = view.runs;
+    const listed = view.summaries ?? (Object.keys(local).length ? [] : null);
+    if (!listed) return null;
+    const merged = listed.map((s) => (local[s.name] ? { ...s, ...local[s.name].run } : s));
+    for (const name of Object.keys(local)) if (!merged.some((r) => r.name === name)) merged.push(local[name].run);
+    return merged.sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date));
+  }, [view.runs, view.summaries]);
+
+  const leave = async () => {
+    const waiting = view.queue.length;
+    if (
+      waiting &&
+      !store.backend.demo &&
+      !(await confirm('Sign out?', `${waiting} change(s) haven't reached ERP yet. They stay on this phone and are sent next time you sign in.`, 'Sign out'))
+    )
+      return;
+    await signOut();
+  };
+
+  const offline = view.sync.online === false;
 
   return (
     <View style={{ flex: 1 }}>
       <Stack.Screen
         options={{
-          headerRight: () => <Button title="Sign out" kind="ghost" onPress={signOut} style={{ minHeight: 36 }} />,
+          headerRight: () => <Button title="Sign out" kind="ghost" onPress={leave} style={{ minHeight: 36 }} />,
         }}
       />
       <FlatList
         data={runs ?? []}
+        extraData={view}
         keyExtractor={(r) => r.name}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={theme.brand} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={pullToRefresh} tintColor={theme.brand} />}
         ListHeaderComponent={
           <View style={{ gap: 4, marginBottom: 6 }}>
             <T size={14} muted>
               {user}
             </T>
-            <T size={13} muted>
-              {backend?.demo ? 'Demo data - nothing is sent to ERP' : site}
-            </T>
+            <View style={styles.row}>
+              <T size={13} muted style={{ flexShrink: 1 }}>
+                {store.backend.demo ? 'Demo data - nothing is sent to ERP' : site}
+              </T>
+              <SyncPill />
+            </View>
+            {offline ? <Banner text="No signal - showing the runs saved on this phone." color={theme.skipped} /> : null}
             {error ? <Banner text={error} color={theme.failed} /> : null}
+            <SyncCard />
           </View>
         }
         ListEmptyComponent={
@@ -72,13 +108,17 @@ export default function MyRuns() {
                 No inspections assigned
               </T>
               <T muted style={{ textAlign: 'center' }}>
-                Runs your supervisor assigns to you show up here. Pull down to refresh.
+                {offline
+                  ? 'No runs are saved on this phone yet. Open the app once with signal to download your runs.'
+                  : 'Runs your supervisor assigns to you show up here. Pull down to refresh.'}
               </T>
             </Card>
           ) : null
         }
         renderItem={({ item: r }) => {
           const done = r.passed + r.failed + r.skipped;
+          const saved = Boolean(view.runs[r.name]);
+          const waiting = view.queue.filter((a) => a.run === r.name).length;
           return (
             <Card onPress={() => router.push({ pathname: '/run/[run]', params: { run: r.name } })}>
               <View style={styles.row}>
@@ -107,6 +147,11 @@ export default function MyRuns() {
                   {r.failed ? `${r.failed} failed` : `${r.checkin_radius_m} m check-in`}
                 </T>
               </View>
+              {saved ? (
+                <T size={13} weight="600" color={waiting ? theme.skipped : theme.passed}>
+                  {waiting ? `● ${waiting} change${waiting === 1 ? '' : 's'} waiting to sync` : '✓ Saved on this phone - works offline'}
+                </T>
+              ) : null}
             </Card>
           );
         }}

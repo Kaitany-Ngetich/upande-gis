@@ -1,40 +1,34 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { type MapPoint, RunMap } from '@/components/run-map';
+import { SyncCard, SyncPill } from '@/components/sync-status';
 import { Banner, Button, Card, Pill, Progress, statusColor, T } from '@/components/ui';
 import { setSimulatedPosition, usePosition } from '@/hooks/use-position';
+import { useRunTrack } from '@/hooks/use-run-track';
 import { useTheme } from '@/hooks/use-theme';
 import { confirm } from '@/lib/confirm';
 import { distanceM, formatDistance } from '@/lib/geo';
-import { useSession } from '@/lib/session';
-
-const TRACK_BATCH = 10; // GPS points per upload
-const TRACK_EVERY_MS = 60_000;
+import { CLOSED_RUN } from '@/lib/rules';
+import { useOffline, useStore } from '@/lib/session';
+import { stopTrack } from '@/lib/track';
 
 export default function RunScreen() {
   const { run: runName } = useLocalSearchParams<{ run: string }>();
   const theme = useTheme();
   const { height } = useWindowDimensions();
-  const { backend, runs, putRun } = useSession();
-  const pkg = runs[runName];
+  const store = useStore();
+  const view = useOffline();
+  const pkg = view.runs[runName];
   const [error, setError] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const { position, error: gpsError, simulated } = usePosition();
 
-  const load = useCallback(async () => {
-    if (!backend) return;
-    try {
-      putRun(await backend.downloadRun(runName));
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    }
-  }, [backend, runName, putRun]);
-
+  // Take ERP's latest copy when there's signal (kept as-is while it has unsent changes).
   useEffect(() => {
-    if (!pkg) load();
-  }, [pkg, load]);
+    store.refreshRun(runName).catch((e: any) => setError(e?.message ?? String(e)));
+  }, [store, runName]);
 
   // Demo: start the simulated inspector a little way from the first stop.
   useEffect(() => {
@@ -44,26 +38,9 @@ export default function RunScreen() {
     }
   }, [simulated, position, pkg]);
 
-  // GPS track: batch positions and send them to ERP.
-  const buffer = useRef<[number, number][]>([]);
-  const lastSent = useRef(Date.now());
-  const flush = useCallback(async () => {
-    if (!backend || !buffer.current.length) return;
-    const pts = buffer.current;
-    buffer.current = [];
-    lastSent.current = Date.now();
-    try {
-      await backend.uploadTrack(runName, pts);
-    } catch {
-      buffer.current = pts.concat(buffer.current); // keep for next time
-    }
-  }, [backend, runName]);
-  useEffect(() => {
-    if (!position || !pkg || ['Completed', 'Partially Completed', 'Cancelled'].includes(pkg.run.status)) return;
-    buffer.current.push([position.lon, position.lat]);
-    if (buffer.current.length >= TRACK_BATCH || Date.now() - lastSent.current > TRACK_EVERY_MS) flush();
-  }, [position, pkg, flush]);
-  useEffect(() => () => void flush(), [flush]);
+  // GPS track for the whole run (background where the phone allows it).
+  const active = Boolean(pkg) && !CLOSED_RUN.includes(pkg?.run.status ?? '');
+  const trackMode = useRunTrack(store, runName, active, position);
 
   const visits = useMemo(() => [...(pkg?.visits ?? [])].sort((a, b) => a.sequence - b.sequence), [pkg]);
   const next = visits.find((v) => v.status === 'Pending');
@@ -90,17 +67,16 @@ export default function RunScreen() {
 
   const r = pkg.run;
   const done = visits.filter((v) => v.status !== 'Pending').length;
-  const closed = ['Completed', 'Partially Completed', 'Cancelled'].includes(r.status);
+  const closed = CLOSED_RUN.includes(r.status);
+  const unsent = new Set(view.queue.map((a) => ('visit' in a ? a.visit : '')));
 
   const finish = async () => {
-    if (!backend) return;
     const pending = visits.length - done;
     if (pending && !(await confirm('Finish run?', `${pending} waypoint(s) not done yet - the run will be marked Partially Completed.`, 'Finish'))) return;
     setFinishing(true);
     try {
-      await flush();
-      await backend.finishRun(r.name);
-      putRun(await backend.downloadRun(r.name));
+      await store.enqueue({ kind: 'finish', run: r.name });
+      if (!store.backend.demo) await stopTrack();
       router.back();
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -139,14 +115,21 @@ export default function RunScreen() {
             <T size={14} muted>
               {done} of {visits.length} done · {r.passed} passed · {r.failed} failed
             </T>
+          </View>
+          <View style={styles.row}>
             <T size={14} muted>
-              {r.distance_walked_m ? `${formatDistance(r.distance_walked_m)} walked` : ''}
+              {r.distance_walked_m ? `${formatDistance(r.distance_walked_m)} walked` : closed ? '' : 'Recording your route'}
             </T>
+            <SyncPill />
           </View>
           {gpsError ? <Banner text={gpsError} color={theme.skipped} /> : null}
           {simulated ? <Banner text="Demo - your position is simulated." color={theme.info} /> : null}
+          {!simulated && trackMode === 'foreground' ? (
+            <Banner text="Route is recorded while the app is open. Allow location “All the time” to keep recording with the screen off." color={theme.info} />
+          ) : null}
           {error ? <Banner text={error} color={theme.failed} /> : null}
         </Card>
+        <SyncCard run={r.name} />
 
         <T size={13} weight="700" muted style={{ marginTop: 4, marginLeft: 4 }}>
           ROUTE
@@ -175,6 +158,11 @@ export default function RunScreen() {
                   </T>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  {unsent.has(v.name) && v.status !== 'Pending' ? (
+                    <T size={11} weight="700" color={theme.skipped}>
+                      NOT SENT
+                    </T>
+                  ) : null}
                   {v.status === 'Pending' ? (
                     <T size={15} weight="700" color={isNext ? theme.brand : theme.textSecondary}>
                       {formatDistance(d)}

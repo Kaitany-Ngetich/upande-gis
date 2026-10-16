@@ -26,6 +26,16 @@ export class ErpError extends Error {
   }
 }
 
+/** No connection (vs. ERP answering with an error). */
+export function isOffline(e: unknown): boolean {
+  return e instanceof ErpError && e.status === 0;
+}
+
+/** ERP is up but having trouble - worth retrying later rather than giving up. */
+export function isTransient(e: unknown): boolean {
+  return e instanceof ErpError && (e.status === 0 || e.status === 408 || e.status === 429 || e.status >= 500);
+}
+
 export class TwoFactorRequired extends Error {
   constructor(
     message: string,
@@ -75,7 +85,11 @@ export class ErpClient implements Backend {
             .filter(([, v]) => v !== undefined && v !== null)
             .map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]),
         ).toString();
+    // Weak field signal can leave a request hanging forever - give up and retry later.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), isForm ? 120_000 : 30_000);
     let res: Response;
+    let text: string;
     try {
       res = await fetch(`${this.site}/api/method/${method}`, {
         method: 'POST',
@@ -84,11 +98,14 @@ export class ErpClient implements Backend {
           ? { Accept: 'application/json' }
           : { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body,
+        signal: ctrl.signal,
       });
-    } catch (e: any) {
+      text = await res.text();
+    } catch {
       throw new ErpError(`Can't reach ${this.site} - check the address and your connection.`);
+    } finally {
+      clearTimeout(timer);
     }
-    const text = await res.text();
     let json: any;
     try {
       json = text ? JSON.parse(text) : {};
@@ -133,6 +150,16 @@ export class ErpClient implements Backend {
       throw new TwoFactorRequired(res.verification.prompt || `Enter the code from your ${method}.`, res.tmp_id);
     }
     return (await this.currentUser()) ?? email;
+  }
+
+  /** Who is signed in: a user, null when the session is gone, 'offline' when ERP can't be reached. */
+  async checkSession(): Promise<string | null | 'offline'> {
+    try {
+      const res = await this.request('frappe.auth.get_logged_user');
+      return res?.message && res.message !== 'Guest' ? res.message : null;
+    } catch (e) {
+      return isOffline(e) ? 'offline' : null;
+    }
   }
 
   /** The signed-in user, or null when the session is gone. */

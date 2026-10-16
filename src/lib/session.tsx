@@ -1,14 +1,22 @@
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import { addNetworkStateListener } from 'expo-network';
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { AppState, Platform } from 'react-native';
 
 import { DemoBackend } from './demo';
 import { ErpClient, normalizeSite } from './erp';
+import { kv } from './kv';
+import { memoryKv } from './kv-types';
+import { type OfflineView, OfflineStore } from './offline';
 import { getSetting, setSetting } from './storage';
-import type { Backend, RunPackage } from './types';
+import { stopTrack } from './track';
+import type { Backend } from './types';
+
+export { newClientId } from './offline';
 
 interface SessionState {
   ready: boolean;
   backend: Backend | null;
+  store: OfflineStore | null;
   user: string | null;
   site: string | null;
   savedSite: string;
@@ -18,33 +26,40 @@ interface SessionState {
   signInWithCode(site: string, email: string, tmpId: string, code: string): Promise<void>;
   startDemo(): void;
   signOut(): Promise<void>;
-  /** Downloaded runs, kept while the app is open (screens share them). */
-  runs: Record<string, RunPackage>;
-  putRun(pkg: RunPackage): void;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
 
+const RETRY_MS = 30_000;
+
+/** Offline data is kept per ERP site + user, so a shared phone never mixes inspectors' work. */
+const namespace = (site: string, user: string) => `${site}|${user}|`;
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
-  const [backend, setBackend] = useState<Backend | null>(null);
+  const [store, setStore] = useState<OfflineStore | null>(null);
   const [user, setUser] = useState<string | null>(null);
   const [site, setSite] = useState<string | null>(null);
   const [savedSite, setSavedSite] = useState('');
   const [savedEmail, setSavedEmail] = useState('');
-  const [runs, setRuns] = useState<Record<string, RunPackage>>({});
 
-  const startDemo = useCallback(() => {
-    setBackend(new DemoBackend());
-    setUser('demo.inspector@upande.com');
-    setSite('Demo · Kapkolia');
-    setRuns({});
+  const open = useCallback(async (backend: Backend, ns: string, u: string, s: string, demo = false) => {
+    const st = new OfflineStore(ns, demo ? memoryKv() : kv, backend);
+    await st.load();
+    setStore(st);
+    setUser(u);
+    setSite(s);
   }, []);
 
-  // Restore: reuse the ERP session if it's still alive, else show login.
+  const startDemo = useCallback(() => {
+    void open(new DemoBackend(), 'demo|', 'demo.inspector@upande.com', 'Demo · Kapkolia', true);
+  }, [open]);
+
+  // Restore: reuse the ERP session if it's alive; with no signal, carry on
+  // offline as the last user (their runs and outbox are on the phone).
   useEffect(() => {
     (async () => {
-      const [s, e] = await Promise.all([getSetting('site'), getSetting('email')]);
+      const [s, e, u] = await Promise.all([getSetting('site'), getSetting('email'), getSetting('user')]);
       setSavedSite(s ?? '');
       setSavedEmail(e ?? '');
       const wantsDemo = Platform.OS === 'web' && /[?&]demo=1\b/.test(globalThis.location?.search ?? '');
@@ -52,26 +67,41 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         startDemo();
       } else if (s) {
         const client = new ErpClient(s);
-        const u = await client.currentUser();
-        if (u) {
-          setBackend(client);
-          setUser(u);
-          setSite(s);
-        }
+        const who = await client.checkSession();
+        if (who === 'offline' && u) await open(client, namespace(s, u), u, s);
+        else if (who && who !== 'offline') await open(client, namespace(s, who), who, s);
       }
       setReady(true);
     })();
-  }, [startDemo]);
+  }, [startDemo, open]);
 
-  const finishSignIn = useCallback(async (client: ErpClient, email: string, u: string) => {
-    await Promise.all([setSetting('site', client.site), setSetting('email', email)]);
-    setSavedSite(client.site);
-    setSavedEmail(email);
-    setBackend(client);
-    setUser(u);
-    setSite(client.site);
-    setRuns({});
-  }, []);
+  // Keep sending the outbox: on reconnect, on returning to the app, and every 30 s while anything waits.
+  useEffect(() => {
+    if (!store) return;
+    void store.sync();
+    const kick = () => {
+      const { queue, sync } = store.snapshot();
+      if ((queue.some((a) => !a.error) || sync.trackPoints) && !sync.needsLogin) void store.sync();
+    };
+    const net = addNetworkStateListener((st) => st.isConnected && kick());
+    const app = AppState.addEventListener('change', (st) => st === 'active' && kick());
+    const timer = setInterval(kick, RETRY_MS);
+    return () => {
+      net.remove();
+      app.remove();
+      clearInterval(timer);
+    };
+  }, [store]);
+
+  const finishSignIn = useCallback(
+    async (client: ErpClient, email: string, u: string) => {
+      await Promise.all([setSetting('site', client.site), setSetting('email', email), setSetting('user', u)]);
+      setSavedSite(client.site);
+      setSavedEmail(email);
+      await open(client, namespace(client.site, u), u, client.site);
+    },
+    [open],
+  );
 
   const signIn = useCallback(
     async (siteInput: string, email: string, password: string) => {
@@ -91,20 +121,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [finishSignIn],
   );
 
+  // Unsent work stays on the phone and goes out next time this user signs in.
   const signOut = useCallback(async () => {
-    await backend?.signOut();
-    setBackend(null);
+    if (!store?.backend.demo) await stopTrack().catch(() => undefined);
+    await store?.backend.signOut();
+    setStore(null);
     setUser(null);
     setSite(null);
-    setRuns({});
-  }, [backend]);
-
-  const putRun = useCallback((pkg: RunPackage) => setRuns((r) => ({ ...r, [pkg.run.name]: pkg })), []);
+  }, [store]);
 
   const value = useMemo(
     () => ({
       ready,
-      backend,
+      backend: store?.backend ?? null,
+      store,
       user,
       site,
       savedSite,
@@ -113,10 +143,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       signInWithCode,
       startDemo,
       signOut,
-      runs,
-      putRun,
     }),
-    [ready, backend, user, site, savedSite, savedEmail, signIn, signInWithCode, startDemo, signOut, runs, putRun],
+    [ready, store, user, site, savedSite, savedEmail, signIn, signInWithCode, startDemo, signOut],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
@@ -127,13 +155,27 @@ export function useSession(): SessionState {
   return s;
 }
 
-/** The backend for screens behind the login - they're only reachable signed in. */
-export function useBackend(): Backend {
-  const { backend } = useSession();
-  if (!backend) throw new Error('Not signed in');
-  return backend;
+/** The offline store for screens behind the login - they're only reachable signed in. */
+export function useStore(): OfflineStore {
+  const { store } = useSession();
+  if (!store) throw new Error('Not signed in');
+  return store;
 }
 
-export function newClientId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+const EMPTY: OfflineView = {
+  runs: {},
+  summaries: null,
+  queue: [],
+  sync: { syncing: false, online: null, lastSync: null, needsLogin: false, trackPoints: 0 },
+};
+const noop = () => () => {};
+
+/** Live view of runs, outbox and sync status. */
+export function useOffline(): OfflineView {
+  const { store } = useSession();
+  return useSyncExternalStore(
+    store?.subscribe ?? noop,
+    store?.snapshot ?? (() => EMPTY),
+    store?.snapshot ?? (() => EMPTY),
+  );
 }

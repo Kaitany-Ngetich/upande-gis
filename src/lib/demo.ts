@@ -1,28 +1,29 @@
 // Demo backend: the real Kapkolia demo run (FIR-01966) as exported from
 // ERP, with the same rules as the server (check-in radius, fail rules,
 // required answers). Lets anyone try the app - and lets us design screens -
-// without an ERP login. Nothing leaves the phone.
+// without an ERP login. Nothing leaves the phone. `offline` simulates having
+// no signal so the offline queue can be tried too.
 
 import demoData from './demo-data.json';
-import { answerFails, distanceM } from './geo';
-import type { AnswerInput, Backend, PhotoInput, RunPackage, RunSummary, SubmitResult, VisitStatus } from './types';
+import { ErpError } from './erp';
+import { distanceM } from './geo';
+import { checkInResult, evaluateAnswers, finishResult, recount, startRun } from './rules';
+import type { AnswerInput, Backend, PhotoInput, RunPackage, SubmitResult } from './types';
 
 export class DemoBackend implements Backend {
   readonly demo = true;
+  offline = false;
   private pkg: RunPackage = JSON.parse(JSON.stringify(demoData.package));
   private track: [number, number][] = [];
+  private seen = new Map<string, SubmitResult>();
 
-  private summary(): RunSummary {
-    const v = this.pkg.visits;
-    const count = (s: VisitStatus) => v.filter((x) => x.status === s).length;
-    Object.assign(this.pkg.run, {
-      total_waypoints: v.length,
-      passed: count('Passed'),
-      failed: count('Failed'),
-      skipped: count('Skipped'),
-      visited: count('Passed') + count('Failed'),
-    });
-    return { ...this.pkg.run };
+  setOffline(offline: boolean) {
+    this.offline = offline;
+  }
+
+  private net() {
+    if (this.offline) return Promise.reject(new ErpError('No signal (demo).', 0));
+    return new Promise((r) => setTimeout(r, 150));
   }
 
   private visit(name: string) {
@@ -32,57 +33,57 @@ export class DemoBackend implements Backend {
   }
 
   async myRuns() {
-    return [this.summary()];
+    await this.net();
+    return [{ ...recount(this.pkg).run }];
   }
 
   async downloadRun() {
+    await this.net();
     if (this.pkg.run.status === 'Planned') this.pkg.run.status = 'Downloaded';
-    this.summary();
+    recount(this.pkg);
     return JSON.parse(JSON.stringify(this.pkg)) as RunPackage;
   }
 
   async checkIn(visit: string, lat: number, lon: number) {
+    await this.net();
     const v = this.visit(visit);
-    const radius = this.pkg.run.checkin_radius_m || 15;
-    const d = distanceM(lat, lon, v.target_lat, v.target_lon);
-    v.within_radius = d <= radius ? 1 : 0;
+    const res = checkInResult(this.pkg, v, lat, lon);
+    v.within_radius = res.within_radius ? 1 : 0;
     v.arrived_at = new Date().toISOString();
-    if (['Planned', 'Downloaded'].includes(this.pkg.run.status)) this.pkg.run.status = 'In Progress';
-    return { within_radius: d <= radius, distance_m: Math.round(d * 10) / 10, radius_m: radius };
+    startRun(this.pkg);
+    return res;
   }
 
-  async submitVisit(visit: string, answers: AnswerInput[]): Promise<SubmitResult> {
+  async submitVisit(visit: string, answers: AnswerInput[], clientId: string): Promise<SubmitResult> {
+    await this.net();
+    const dup = this.seen.get(clientId);
+    if (dup) return { ...dup, duplicate: true };
     const v = this.visit(visit);
-    if (!v.within_radius) throw new Error(`Check in at ${v.waypoint_title} first.`);
-    const questions = v.template ? this.pkg.templates[v.template]?.questions ?? [] : [];
-    const given = new Map(answers.map((a) => [a.question.trim().toLowerCase(), a]));
-    const missing = questions.filter((q) => {
-      const a = given.get(q.question.toLowerCase());
-      return q.required && !a?.answer && !a?.photo;
-    });
-    if (missing.length) throw new Error(`Answer required: ${missing.map((q) => q.question).join(', ')}`);
-    const failed = questions
-      .filter((q) => answerFails(q.fail_when, given.get(q.question.toLowerCase())?.answer))
-      .map((q) => q.question);
-    v.status = failed.length ? 'Failed' : 'Passed';
+    const { status, failed } = evaluateAnswers(this.pkg, v, answers);
+    v.status = status;
     v.completed_at = new Date().toISOString();
-    this.summary();
-    return { status: v.status, visit, failed_questions: failed };
+    recount(this.pkg);
+    const res = { status, visit, failed_questions: failed };
+    this.seen.set(clientId, res);
+    return res;
   }
 
   async skipVisit(visit: string, reason: string): Promise<SubmitResult> {
+    await this.net();
     const v = this.visit(visit);
     v.status = 'Skipped';
     v.skip_reason = reason;
-    this.summary();
+    recount(this.pkg);
     return { status: 'Skipped', visit };
   }
 
   async uploadPhoto(_visit: string, photo: PhotoInput) {
+    await this.net();
     return photo.uri;
   }
 
   async uploadTrack(_run: string, coordinates: [number, number][]) {
+    await this.net();
     this.track.push(...coordinates);
     let d = 0;
     for (let i = 1; i < this.track.length; i++) {
@@ -93,9 +94,10 @@ export class DemoBackend implements Backend {
   }
 
   async finishRun() {
-    const pending = this.pkg.visits.filter((v) => v.status === 'Pending').length;
-    this.pkg.run.status = pending ? 'Partially Completed' : 'Completed';
-    return { status: this.pkg.run.status, pending };
+    await this.net();
+    const res = finishResult(this.pkg);
+    this.pkg.run.status = res.status;
+    return res;
   }
 
   async signOut() {}

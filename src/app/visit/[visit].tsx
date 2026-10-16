@@ -8,24 +8,31 @@ import { Banner, Button, Card, Choice, Field, Pill, statusColor, T } from '@/com
 import { setSimulatedPosition, usePosition } from '@/hooks/use-position';
 import { useTheme } from '@/hooks/use-theme';
 import { answerFails, distanceM, formatDistance } from '@/lib/geo';
-import { newClientId, useSession } from '@/lib/session';
-import type { CheckInResult, PhotoInput, Question } from '@/lib/types';
+import type { QueuedAnswer } from '@/lib/offline';
+import { deletePhoto, persistPhoto } from '@/lib/photos';
+import { radiusOf } from '@/lib/rules';
+import { newClientId, useOffline, useStore } from '@/lib/session';
+import type { PhotoInput, Question } from '@/lib/types';
 
 const SKIP_REASONS = ['Gate locked', 'Unsafe to reach', 'Asset not found', 'Flooded / no access'];
 const SHOWN_PROPERTIES = ['elevation_m', 'base_demand_lps', 'diameter_mm', 'material', 'voltage', 'condition'];
 
+/** "14:05" from an ISO time (phone) or a Frappe datetime "2026-10-16 14:05:12" (ERP, local time). */
+function clockTime(s: string): string {
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
+  return Number.isNaN(d.getTime()) ? s.slice(11, 16) : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
 export default function VisitScreen() {
   const { visit: visitName, run: runName } = useLocalSearchParams<{ visit: string; run: string }>();
   const theme = useTheme();
-  const { backend, runs, putRun } = useSession();
-  const pkg = runs[runName];
+  const store = useStore();
+  const view = useOffline();
+  const pkg = view.runs[runName];
   const visit = pkg?.visits.find((v) => v.name === visitName);
   const template = visit?.template ? pkg?.templates[visit.template] : undefined;
   const { position, simulated } = usePosition();
 
-  const [checkIn, setCheckIn] = useState<CheckInResult | null>(
-    visit?.within_radius ? { within_radius: true, distance_m: null, radius_m: pkg?.run.checkin_radius_m ?? 15 } : null,
-  );
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<Record<string, PhotoInput>>({});
   const [skipMode, setSkipMode] = useState(false);
@@ -41,32 +48,29 @@ export default function VisitScreen() {
 
   // Opened directly (deep link / notification): load the run first.
   useEffect(() => {
-    if (!pkg && backend) backend.downloadRun(runName).then(putRun, (e) => setError(e?.message ?? String(e)));
-  }, [pkg, backend, runName, putRun]);
+    if (!pkg) store.refreshRun(runName).catch((e: any) => setError(e?.message ?? String(e)));
+  }, [pkg, store, runName]);
 
-  if (!pkg || !visit || !backend) {
+  if (!pkg || !visit) {
     return (
       <View style={styles.center}>
-        {error ? <Banner text={error} color={theme.failed} /> : pkg ? <T muted>This waypoint isn't part of the run.</T> : <ActivityIndicator color={theme.brand} size="large" />}
+        {error ? <Banner text={error} color={theme.failed} /> : pkg ? <T muted>This waypoint isn&apos;t part of the run.</T> : <ActivityIndicator color={theme.brand} size="large" />}
       </View>
     );
   }
 
-  const radius = pkg.run.checkin_radius_m || 15;
+  const radius = radiusOf(pkg);
   const near = distance != null && distance <= radius;
   const done = visit.status !== 'Pending';
+  const unsent = view.queue.some((a) => 'visit' in a && a.visit === visit.name);
   const nextVisit = [...pkg.visits].sort((a, b) => a.sequence - b.sequence).find((v) => v.status === 'Pending' && v.name !== visit.name);
-
-  const refresh = async () => putRun(await backend.downloadRun(runName));
 
   const doCheckIn = async () => {
     if (!position) return;
     setBusy('checkin');
     setError(null);
     try {
-      const res = await backend.checkIn(visit.name, position.lat, position.lon, position.accuracy);
-      setCheckIn(res);
-      if (!res.within_radius) setError(`You're ${formatDistance(res.distance_m)} away - get within ${res.radius_m} m.`);
+      await store.enqueue({ kind: 'checkin', run: runName, visit: visit.name, lat: position.lat, lon: position.lon, accuracy: position.accuracy });
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
@@ -89,18 +93,21 @@ export default function VisitScreen() {
     }));
   };
 
+  // Saved on the phone first (photos copied to app storage), sent to ERP by the sync.
   const submit = async () => {
     setBusy('submit');
     setError(null);
+    const kept: string[] = [];
     try {
-      const payload = [];
+      const queued: QueuedAnswer[] = [];
       for (const q of template?.questions ?? []) {
-        const photo = photos[q.question] ? await backend.uploadPhoto(visit.name, photos[q.question]) : null;
-        payload.push({ question: q.question, answer: answers[q.question] ?? null, photo });
+        const photo = photos[q.question] ? await persistPhoto(photos[q.question]) : null;
+        if (photo) kept.push(photo.uri);
+        queued.push({ question: q.question, answer: answers[q.question] ?? null, photo });
       }
-      await backend.submitVisit(visit.name, payload, clientId);
-      await refresh();
+      await store.enqueue({ kind: 'submit', id: clientId, run: runName, visit: visit.name, answers: queued });
     } catch (e: any) {
+      kept.forEach(deletePhoto);
       setError(e?.message ?? String(e));
     } finally {
       setBusy(null);
@@ -111,8 +118,7 @@ export default function VisitScreen() {
     if (!skipReason.trim()) return setError('Say why this waypoint can’t be inspected.');
     setBusy('skip');
     try {
-      await backend.skipVisit(visit.name, skipReason.trim(), clientId);
-      await refresh();
+      await store.enqueue({ kind: 'skip', id: clientId, run: runName, visit: visit.name, reason: skipReason.trim() });
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
@@ -122,7 +128,7 @@ export default function VisitScreen() {
 
   const props = visit.asset_details?.properties ?? {};
   const shown = SHOWN_PROPERTIES.filter((k) => props[k] != null && props[k] !== '');
-  const unlocked = Boolean(checkIn?.within_radius) && !done;
+  const unlocked = Boolean(visit.within_radius) && !done;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -166,7 +172,14 @@ export default function VisitScreen() {
             <T size={18} weight="700" color={statusColor(theme, visit.status)}>
               {visit.status === 'Skipped' ? `Skipped - ${visit.skip_reason ?? ''}` : `Inspection ${visit.status.toLowerCase()}`}
             </T>
-            <T muted>Saved to ERP{visit.completed_at ? ` · ${visit.completed_at.slice(11, 16)}` : ''}.</T>
+            <T muted>
+              {unsent
+                ? `Saved on this phone${store.backend.demo ? ' (demo)' : ''} - sent to ERP when there is signal`
+                : store.backend.demo
+                  ? 'Saved (demo)'
+                  : 'Saved to ERP'}
+              {visit.completed_at ? ` · ${clockTime(visit.completed_at)}` : ''}.
+            </T>
             {nextVisit ? (
               <Button
                 title={`Next: ${nextVisit.sequence}. ${nextVisit.waypoint_title}`}

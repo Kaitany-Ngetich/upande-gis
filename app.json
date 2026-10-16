@@ -37,7 +37,11 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Upande GIS uses your location to check you in at inspection waypoints and record the route you walk."
+          "locationWhenInUsePermission": "Upande GIS uses your location to check you in at inspection waypoints and record the route you walk.",
+          "locationAlwaysAndWhenInUsePermission": "Upande GIS records the route you walk during an inspection run, also while the phone is locked or in your pocket. Recording stops when you finish the run.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [
@@ -46,7 +50,8 @@
           "cameraPermission": "Upande GIS uses the camera to photograph assets during inspections.",
           "photosPermission": false
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,
