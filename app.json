@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "upande-gis",
+    "name": "Upande GIS",
     "slug": "upande-gis",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -28,9 +28,23 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#1F6B4A",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Upande GIS uses your location to check you in at inspection waypoints and record the route you walk."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Upande GIS uses the camera to photograph assets during inspections.",
+          "photosPermission": false
         }
       ]
     ],
