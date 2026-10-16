@@ -85,6 +85,9 @@ export default function Login() {
                   keyboardType="url"
                   placeholder="yourcompany.frappe.cloud"
                 />
+                <T size={12} muted style={{ marginTop: -6 }}>
+                  On the same Wi-Fi as a test server: http://192.168.x.x:8000
+                </T>
                 <Field
                   label="Email"
                   value={email}

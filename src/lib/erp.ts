@@ -65,11 +65,7 @@ function serverMessage(body: any, fallback: string): string {
   return body?.message && typeof body.message === 'string' ? body.message : fallback;
 }
 
-export function normalizeSite(site: string): string {
-  let s = site.trim().replace(/\/+$/, '');
-  if (s && !/^https?:\/\//i.test(s)) s = `https://${s}`;
-  return s;
-}
+export { normalizeSite } from './site';
 
 export class ErpClient implements Backend {
   readonly demo = false;
