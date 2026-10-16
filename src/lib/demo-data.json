@@ -1,0 +1,232 @@
+{
+ "runs": [
+  {
+   "name": "FIR-01966",
+   "plan": "Kapkolia Demo Inspection",
+   "farm": "Kapkolia",
+   "scheduled_date": "2026-10-15",
+   "status": "Planned",
+   "total_waypoints": 4,
+   "visited": 0,
+   "passed": 0,
+   "failed": 0,
+   "skipped": 0,
+   "checkin_radius_m": 15.0,
+   "distance_walked_m": 0.0,
+   "modified": "2026-10-15 18:41:16.378688"
+  }
+ ],
+ "package": {
+  "run": {
+   "name": "FIR-01966",
+   "owner": "Administrator",
+   "creation": "2026-10-15 18:18:02.653318",
+   "modified": "2026-10-15 18:41:16.006716",
+   "modified_by": "Administrator",
+   "docstatus": 0,
+   "idx": 0,
+   "plan": "Kapkolia Demo Inspection",
+   "inspector": "Administrator",
+   "scheduled_date": "2026-10-15",
+   "status": "Downloaded",
+   "farm": "Kapkolia",
+   "checkin_radius_m": 15.0,
+   "started_at": null,
+   "finished_at": null,
+   "total_waypoints": 4,
+   "visited": 0,
+   "passed": 0,
+   "failed": 0,
+   "skipped": 0,
+   "track": null,
+   "distance_walked_m": 0.0,
+   "notes": null,
+   "doctype": "Field Inspection Run"
+  },
+  "plan": {
+   "name": "Kapkolia Demo Inspection",
+   "description": null,
+   "farm": "Kapkolia",
+   "checkin_radius_m": 15.0
+  },
+  "route": null,
+  "visits": [
+   {
+    "name": "FIV-001967",
+    "sequence": 1,
+    "waypoint_title": "Start gate",
+    "status": "Pending",
+    "asset": null,
+    "point": "SPF-01956",
+    "template": null,
+    "target_lat": 0.07,
+    "target_lon": 35.747,
+    "arrived_at": null,
+    "within_radius": 0,
+    "completed_at": null,
+    "skip_reason": null,
+    "client_id": null,
+    "instructions": null,
+    "asset_details": null
+   },
+   {
+    "name": "FIV-001968",
+    "sequence": 2,
+    "waypoint_title": "J-001",
+    "status": "Pending",
+    "asset": "SPF-01748",
+    "point": "SPF-01957",
+    "template": "Junction check",
+    "target_lat": 0.0731295,
+    "target_lon": 35.74719806,
+    "arrived_at": null,
+    "within_radius": 0,
+    "completed_at": null,
+    "skip_reason": null,
+    "client_id": null,
+    "instructions": null,
+    "asset_details": {
+     "name": "SPF-01748",
+     "title": "J-001",
+     "role": "Junction",
+     "layer": "Water Junctions",
+     "properties": {
+      "elevation_m": 2053.17,
+      "base_demand_lps": 0.0,
+      "elevation_source": "Copernicus GLO-30 DEM (2026-10-14)"
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       35.74719806,
+       0.0731295
+      ]
+     },
+     "length_m": 0.0,
+     "area_sq_m": 0.0
+    }
+   },
+   {
+    "name": "FIV-001969",
+    "sequence": 3,
+    "waypoint_title": "J-002",
+    "status": "Pending",
+    "asset": "SPF-01749",
+    "point": "SPF-01958",
+    "template": "Junction check",
+    "target_lat": 0.07259022,
+    "target_lon": 35.74794801,
+    "arrived_at": null,
+    "within_radius": 0,
+    "completed_at": null,
+    "skip_reason": null,
+    "client_id": null,
+    "instructions": null,
+    "asset_details": {
+     "name": "SPF-01749",
+     "title": "J-002",
+     "role": "Junction",
+     "layer": "Water Junctions",
+     "properties": {
+      "elevation_m": 2048.01,
+      "base_demand_lps": 0.0,
+      "elevation_source": "Copernicus GLO-30 DEM (2026-10-14)"
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       35.74794801,
+       0.07259022
+      ]
+     },
+     "length_m": 0.0,
+     "area_sq_m": 0.0
+    }
+   },
+   {
+    "name": "FIV-001970",
+    "sequence": 4,
+    "waypoint_title": "J-003",
+    "status": "Pending",
+    "asset": "SPF-01750",
+    "point": "SPF-01959",
+    "template": "Junction check",
+    "target_lat": 0.07258478,
+    "target_lon": 35.74732371,
+    "arrived_at": null,
+    "within_radius": 0,
+    "completed_at": null,
+    "skip_reason": null,
+    "client_id": null,
+    "instructions": null,
+    "asset_details": {
+     "name": "SPF-01750",
+     "title": "J-003",
+     "role": "Junction",
+     "layer": "Water Junctions",
+     "properties": {
+      "elevation_m": 2051.75,
+      "base_demand_lps": 3.5759,
+      "demand_pattern": "Kapkolia Irrigation Schedule",
+      "elevation_source": "Copernicus GLO-30 DEM (2026-10-14)"
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       35.74732371,
+       0.07258478
+      ]
+     },
+     "length_m": 0.0,
+     "area_sq_m": 0.0
+    }
+   }
+  ],
+  "templates": {
+   "Junction check": {
+    "name": "Junction check",
+    "asset_role": "Junction",
+    "description": "Demo checklist for water network junctions.",
+    "questions": [
+     {
+      "question": "Valve chamber accessible?",
+      "answer_type": "Yes/No",
+      "required": 1,
+      "options": [],
+      "fail_when": "= No",
+      "help_text": null
+     },
+     {
+      "question": "Pressure reading (m)",
+      "answer_type": "Number",
+      "required": 1,
+      "options": [],
+      "fail_when": "> 60",
+      "help_text": null
+     },
+     {
+      "question": "Condition",
+      "answer_type": "Select",
+      "required": 1,
+      "options": [
+       "Good",
+       "Leaking",
+       "Broken"
+      ],
+      "fail_when": "in Leaking,Broken",
+      "help_text": null
+     },
+     {
+      "question": "Photo",
+      "answer_type": "Photo",
+      "required": 0,
+      "options": [],
+      "fail_when": null,
+      "help_text": null
+     }
+    ]
+   }
+  },
+  "server_time": "2026-10-15 18:41:16.378625"
+ }
+}
